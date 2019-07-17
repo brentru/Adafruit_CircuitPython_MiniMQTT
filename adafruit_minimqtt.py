@@ -378,7 +378,8 @@ class MQTT:
         pkt[i] = sz
         if self._logger is not None:
             self._logger.debug('Sending PUBLISH\nTopic: {0}\nMsg: {1}\
-                                \nQoS: {2}\nRetain? {3}'.format(topic, msg, qos, retain))
+                                \nQoS: {2}\nRetain? {3}'.format(topic,
+                                                                msg.decode('utf-8'), qos, retain))
         self._sock.write(pkt)
         self._send_str(topic)
         if qos == 0:
