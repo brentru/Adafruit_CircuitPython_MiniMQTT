@@ -64,9 +64,8 @@ MQTT_PINGRESP = const(0xd0)
 MQTT_SUB = b'\x82'
 MQTT_UNSUB = b'\xA2'
 MQTT_PUB = bytearray(b'\x30\0')
-MQTT_CON = bytearray(b'\x10\0\0')
-# Variable CONNECT header [MQTT 3.1.2]
-MQTT_CON_HEADER = bytearray(b"\x04MQTT\x04\x02\0\0")
+MQTT_CON_FIXED_HEADER = bytearray(b'\x10\x00')
+MQTT_CON_FIXED_HEADER_VAR_HEADER = bytearray(b"\x04MQTT\x04\x02\0\0")
 MQTT_DISCONNECT = b'\xe0\0'
 
 CONNACK_ERRORS = {const(0x01) : 'Connection Refused - Incorrect Protocol Version',
@@ -238,21 +237,26 @@ class MQTT:
                 self._sock.connect(addr, TCP_MODE)
             except RuntimeError as e:
                 raise MMQTTException("Invalid broker address defined.", e)
-        premsg = MQTT_CON
-        msg = MQTT_CON_HEADER
-        msg[6] = clean_session << 1
+        premsg = MQTT_CON_FIXED_HEADER
+        # br: remember preheader is now MQTT_CON_VAR HEADER
+        var_header = MQTT_CON_FIXED_HEADER_VAR_HEADER
+        # Clean Session [3.1.2.4]
+        var_header[6] = clean_session << 1
+
+        # Remaining length
         sz = 12 + len(self._client_id)
         if self._user is not None:
             sz += 2 + len(self._user) + 2 + len(self._pass)
-            msg[6] |= 0xC0
+            var_header[6] |= 0xC0
         if self._keep_alive:
             assert self._keep_alive < MQTT_TOPIC_LENGTH_LIMIT
-            msg[7] |= self._keep_alive >> 8
-            msg[8] |= self._keep_alive & 0x00FF
+            var_header[7] |= self._keep_alive >> 8
+            var_header[8] |= self._keep_alive & 0x00FF
         if self._lw_topic:
             sz += 2 + len(self._lw_topic) + 2 + len(self._lw_msg)
-            msg[6] |= 0x4 | (self._lw_qos & 0x1) << 3 | (self._lw_qos & 0x2) << 3
-            msg[6] |= self._lw_retain << 5
+            var_header[6] |= 0x4 | (self._lw_qos & 0x1) << 3 | (self._lw_qos & 0x2) << 3
+            var_header[6] |= self._lw_retain << 5
+        # Remaining length encoding
         i = 1
         while sz > 0x7f:
             premsg[i] = (sz & 0x7f) | 0x80
@@ -261,8 +265,13 @@ class MQTT:
         premsg[i] = sz
         if self._logger is not None:
             self._logger.debug('Sending CONNECT packet to broker')
+        
+        # Socket Activity
+        packet = bytearray()
+        # Fixed header + varable header
+        packet += premsg + var_header
         self._sock.write(premsg)
-        self._sock.write(msg)
+        self._sock.write(var_header)
         # [MQTT-3.1.3-4]
         self._send_str(self._client_id)
         if self._lw_topic:
