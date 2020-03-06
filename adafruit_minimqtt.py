@@ -79,13 +79,12 @@ class MMQTTException(Exception):
     #pass
 
 class MQTT:
-    """MQTT Client for CircuitPython
-    :param socket: Socket object for provided network interface
+    """MQTT Client for CircuitPython.
+    :param socket: Socket object
     :param str broker: MQTT Broker URL or IP Address.
     :param int port: Optional port definition, defaults to 8883.
     :param str username: Username for broker authentication.
     :param str password: Password for broker authentication.
-    :param network_manager: NetworkManager object, such as WiFiManager from ESPSPI_WiFiManager.
     :param str client_id: Optional client identifier, defaults to a unique, generated string.
     :param bool is_ssl: Sets a secure or insecure connection with the broker.
     :param bool log: Attaches a logger to the MQTT client, defaults to logging level INFO.
@@ -93,18 +92,11 @@ class MQTT:
     """
     # pylint: disable=too-many-arguments,too-many-instance-attributes, not-callable, invalid-name, no-member
     def __init__(self, socket, broker, port=None, username=None,
-                 password=None, network_manager=None, client_id=None,
-                 is_ssl=True, log=False, keep_alive=60):
-        # network management
+                 password=None, client_id=None, is_ssl=True,
+                 log=False, keep_alive=60):
         self._socket = socket
-        network_manager_type = str(type(network_manager))
-        if 'ESPSPI_WiFiManager' in network_manager_type:
-            self._wifi = network_manager
-        else:
-            raise TypeError("This library requires a NetworkManager object.")
-        # broker
         try: # set broker IP
-            self.broker = self._wifi.esp.unpretty_ip(broker)
+            self.broker = self.unpretty_ip(broker)
         except ValueError: # set broker URL
             self.broker = broker
         # port/ssl
@@ -158,9 +150,15 @@ class MQTT:
     def __exit__(self, exception_type, exception_value, traceback):
         self.deinit()
 
+   def unpretty_ip(self, ip):
+        """Converts a dotted-quad string to a bytearray IP address"""
+        octets = [int(x) for x in ip.split('.')]
+        return bytes(octets)
+
     def deinit(self):
         """De-initializes the MQTT client and disconnects from
         the mqtt broker.
+
         """
         self.disconnect()
 
@@ -170,6 +168,7 @@ class MQTT:
         :param str message: Last will disconnection message.
         :param int qos: Quality of Service level.
         :param bool retain: Specifies if the message is to be retained when it is published.
+
         """
         if self._is_connected:
             raise MMQTTException('Last Will should be defined before connect() is called.')
@@ -184,14 +183,10 @@ class MQTT:
 
     # pylint: disable=too-many-branches, too-many-statements
     def connect(self, clean_session=True):
-        """Initiates connection with the MQTT Broker.
+        """Connects the socket to the MQTT broker.
         :param bool clean_session: Establishes a persistent session.
+
         """
-        self._set_interface()
-        if self.logger is not None:
-            self.logger.debug('Creating new socket')
-        self._sock = self._socket.socket()
-        self._sock.settimeout(10)
         if self.port == 8883:
             try:
                 if self.logger is not None:
@@ -207,7 +202,6 @@ class MQTT:
             try:
                 if self.logger is not None:
                     self.logger.debug('Attempting to establish insecure MQTT connection...')
-                #self._sock.connect((self.broker, self.port), TCP_MODE)
                 self._sock.connect(addr, TCP_MODE)
             except RuntimeError as e:
                 raise MMQTTException("Invalid broker address defined.", e)
@@ -285,8 +279,7 @@ class MQTT:
                 return result
 
     def disconnect(self):
-        """Disconnects the MiniMQTT client from the MQTT broker.
-        """
+        """Disconnects the MiniMQTT client from the broker."""
         self.is_connected()
         if self.logger is not None:
             self.logger.debug('Sending DISCONNECT packet to broker')
@@ -302,6 +295,7 @@ class MQTT:
     def ping(self):
         """Pings the MQTT Broker to confirm if the broker is alive or if
         there is an active network connection.
+
         """
         self.is_connected()
         if self.logger is not None:
@@ -538,49 +532,6 @@ class MQTT:
                     self._subscribed_topics.remove(t)
                 return
 
-    @property
-    def is_wifi_connected(self):
-        """Returns if the ESP module is connected to
-        an access point, resets module if False"""
-        if self._wifi:
-            return self._wifi.esp.is_connected
-        raise MMQTTException("MiniMQTT Client does not use a WiFi NetworkManager.")
-
-    # pylint: disable=line-too-long, protected-access
-    @property
-    def is_sock_connected(self):
-        """Returns if the socket is connected."""
-        return self.is_wifi_connected and self._sock and self._wifi.esp.socket_connected(self._sock._socknum)
-
-    def reconnect_socket(self):
-        """Re-establishes the socket's connection with the MQTT broker.
-        """
-        try:
-            if self.logger is not None:
-                self.logger.debug("Attempting to reconnect with MQTT Broker...")
-            self.reconnect()
-        except RuntimeError as err:
-            if self.logger is not None:
-                self.logger.debug('Failed to reconnect with MQTT Broker, retrying...', err)
-            time.sleep(1)
-            self.reconnect_socket()
-
-    def reconnect_wifi(self):
-        """Reconnects to WiFi Access Point and socket, if disconnected.
-        """
-        while not self.is_wifi_connected:
-            try:
-                if self.logger is not None:
-                    self.logger.debug('Connecting to WiFi AP...')
-                self._wifi.connect()
-            except (RuntimeError, ValueError):
-                if self.logger is not None:
-                    self.logger.debug('Failed to reset WiFi module, retrying...')
-                time.sleep(1)
-        # we just reconnected, is the socket still connected?
-        if not self.is_sock_connected:
-            self.reconnect_socket()
-
     def reconnect(self, resub_topics=True):
         """Attempts to reconnect to the MQTT broker.
         :param bool resub_topics: Resubscribe to previously subscribed topics.
@@ -601,19 +552,13 @@ class MQTT:
         """Starts a blocking message loop. Use this
         method if you want to run a program forever.
         Code below a call to this method will NOT execute.
-        Network reconnection is handled within this call.
+        NOTE: Network management is not handled in this loop,
+        if you need to manage your network connection, use loop
+        in your code and handle the network interface within it.
 
         """
         while True:
-            # Check WiFi and socket status
-            if self.is_sock_connected:
-                try:
-                    self.loop()
-                except (RuntimeError, ValueError):
-                    if self._wifi:
-                        # Reconnect the WiFi module and the socket
-                        self.reconnect_wifi()
-                    continue
+            self.loop()
 
     def loop(self):
         """Non-blocking message loop. Use this method to
@@ -714,16 +659,6 @@ class MQTT:
                 raise MMQTTException('QoS must be between 1 and 2.')
         else:
             raise MMQTTException('QoS must be an integer.')
-
-    def _set_interface(self):
-        """Sets a desired network hardware interface.
-        The network hardware must be set in init
-        prior to calling this method.
-        """
-        if self._wifi:
-            self._socket.set_interface(self._wifi.esp)
-        else:
-            raise TypeError('Network Manager Required.')
 
     def is_connected(self):
         """Returns MQTT client session status as True if connected, raises
