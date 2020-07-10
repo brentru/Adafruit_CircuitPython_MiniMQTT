@@ -65,7 +65,7 @@ MQTT_TLS_PORT = const(8883)
 MQTT_PINGREQ = b"\xc0\0"
 MQTT_PINGRESP = const(0xD0)
 MQTT_SUB = bytearray(b"\x82")
-MQTT_UNSUB = b"\xA2"
+MQTT_UNSUB = bytearray(b"\xA2")
 MQTT_PUB = bytearray(b"\x30")
 MQTT_DISCONNECT = b"\xe0\0"
 
@@ -569,8 +569,8 @@ class MQTT:
         packet_length = 2 + (2 * len(topics)) + (1 * len(topics))
         packet_length += sum(len(topic) for topic, qos in topics)
         packet.append(packet_length)
-        packet.extend(self._pid.to_bytes(2, "big"))
         self._pid += 1
+        packet.extend(self._pid.to_bytes(2, "big"))
 
         for t, q in topics:
             topic_size = len(t).to_bytes(2, "big")
@@ -626,15 +626,19 @@ class MQTT:
                     "Topic must be subscribed to before attempting unsubscribe."
                 )
         # Assemble packet
+        packet = bytearray()
+        packet.extend(MQTT_UNSUB)
         packet_length = 2 + (2 * len(topics))
         packet_length += sum(len(topic) for topic in topics)
-        packet_length_byte = packet_length.to_bytes(1, "big")
+        packet.append(packet_length)
         self._pid += 1
-        packet_id_bytes = self._pid.to_bytes(2, "big")
-        packet = MQTT_UNSUB + packet_length_byte + packet_id_bytes
+        packet.extend(self._pid.to_bytes(2, "big"))
+
         for t in topics:
             topic_size = len(t).to_bytes(2, "big")
-            packet += topic_size + t
+            packet.extend(topic_size)
+            packet.extend(t.encode())
+
         if self.logger is not None:
             for t in topics:
                 self.logger.debug("UNSUBSCRIBING from topic {0}.".format(t))
@@ -648,8 +652,8 @@ class MQTT:
                 assert return_code[0] == 0x02
                 # [MQTT-3.32]
                 assert (
-                    return_code[1] == packet_id_bytes[0]
-                    and return_code[2] == packet_id_bytes[1]
+                    return_code[1] == self._pid.to_bytes(2, "big")[0]
+                    and return_code[2] == self._pid.to_bytes(2, "big")[1]
                 )
                 for t in topics:
                     if self.on_unsubscribe is not None:
