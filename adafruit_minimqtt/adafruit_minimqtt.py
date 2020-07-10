@@ -713,15 +713,19 @@ class MQTT:
                 )
             self.ping()
             self._timestamp = 0
-        self._sock.settimeout(0.1)
+        # check for pending messages from the server
+        self._sock.settimeout(0.01)
         return self._wait_for_msg()
 
     def _wait_for_msg(self, timeout=30):
         """Reads and processes network events.
         Returns response code if successful.
         """
-        res = self._sock.recv(1)
-        self._sock.settimeout(timeout)
+        try:
+            res = self._sock.recv(1)
+            self._sock.settimeout(timeout)
+        except socket_module.timeout:
+            return None
         if res in [None, b""]:
             return None
         if res == MQTT_PINGRESP:
