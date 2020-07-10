@@ -1,4 +1,3 @@
-import time
 import socket
 import ssl
 import adafruit_minimqtt.adafruit_minimqtt as MQTT
@@ -47,9 +46,10 @@ def publish(client, userdata, topic, pid):
     # This method is called when the client publishes data to a feed.
     print("Published to {0} with PID {1}".format(topic, pid))
 
+
 # Set up a MiniMQTT Client
 client = MQTT.MQTT(
-    broker=secrets["broker"], username=secrets["user"], password=secrets["pass"]
+    broker="BROKER_ADDRESS", username="YOUR_USERNAME", password="YOUR_PASSWORD"
 )
 
 # Connect callback handlers to client
