@@ -48,7 +48,7 @@ from micropython import const
 try:
     import adafruit_logging as logging
 except ModuleNotFoundError:
-    import logging # import native CPython logger
+    import logging  # import native CPython logger
 from .matcher import MQTTMatcher
 
 __version__ = "0.0.0-auto.0"
@@ -95,11 +95,13 @@ class MMQTTException(Exception):
 # This module mirror CPython's socket class. It is settable because the network devices are external
 # to CircuitPython.
 socket_module = None  # pylint: disable=invalid-name
-ssl_context = None
+ssl_context = None  # pylint: disable=invalid-name
 
 
 # Hang onto open sockets so that we can reuse them.
-_socket_pool = {} # pylint: disable=invalid-name
+_socket_pool = {}  # pylint: disable=invalid-name
+
+
 def _get_socket(host, port, proto, *, timeout=5):
     key = (host, port, proto)
     if key in _socket_pool:
@@ -107,11 +109,15 @@ def _get_socket(host, port, proto, *, timeout=5):
     if not socket_module:
         raise RuntimeError("socket_module must be set before using adafruit_requests")
     if proto == "https:" and not ssl_context:
-        raise RuntimeError("ssl_context must be set before using adafruit_requests for https")
+        raise RuntimeError(
+            "ssl_context must be set before using adafruit_requests for https"
+        )
     addr_info = socket_module.getaddrinfo(host, port, 0, socket_module.SOCK_STREAM)[0]
     sock = socket_module.socket(addr_info[0], addr_info[1], addr_info[2])
     if proto == "https:":
+        print("https")
         sock = ssl_context.wrap_socket(sock, server_hostname=host)
+        print(sock)
     sock.settimeout(timeout)  # socket read timeout
 
     sock.connect((host, port))
@@ -291,25 +297,13 @@ class MQTT:
 
         """
         if self.port == 8883:
-            try:
-                if self.logger is not None:
-                    self.logger.debug(
-                        "Attempting to establish secure MQTT connection..."
-                    )
-                self._sock = _get_socket(self.broker, self.port, "https")
-                #conntype = _the_interface.TLS_MODE
-                #self._sock.connect((self.broker, self.port), conntype)
-            except RuntimeError as e:
-                raise MMQTTException("Invalid broker address defined.", e)
+            if self.logger is not None:
+                self.logger.debug("Attempting to establish secure MQTT connection...")
+            self._sock = _get_socket(self.broker, self.port, "https:")
         else:
-            try:
-                if self.logger is not None:
-                    self.logger.debug(
-                        "Attempting to establish insecure MQTT connection..."
-                    )
-                self._sock = _get_socket(self.broker, self.port, "http")
-            except RuntimeError as e:
-                raise MMQTTException("Invalid broker address defined.", e)
+            if self.logger is not None:
+                self.logger.debug("Attempting to establish insecure MQTT connection...")
+            self._sock = _get_socket(self.broker, self.port, "http:")
 
         # Fixed Header
         fixed_header = bytearray()
@@ -356,9 +350,6 @@ class MQTT:
 
         if self.logger is not None:
             self.logger.debug("Sending CONNECT to broker")
-            self.logger.debug(
-                "Fixed Header: {}\nVariable Header: {}".format(fixed_header, var_header)
-            )
         self._sock.send(fixed_header)
         self._sock.send(var_header)
         # [MQTT-3.1.3-4]
@@ -494,12 +485,7 @@ class MQTT:
             pub_hdr_fixed.append(remaining_length)
 
         if self.logger is not None:
-            self.logger.debug(
-                "Sending PUBLISH\nTopic: {0}\nMsg: {1}\
-                                \nQoS: {2}\nRetain? {3}".format(
-                    topic, msg, qos, retain
-                )
-            )
+            self.logger.debug("Publishing to %s with QoS %d", topic, qos)
         self._sock.send(pub_hdr_fixed)
         self._sock.send(pub_hdr_var)
         self._sock.send(msg)
@@ -580,7 +566,7 @@ class MQTT:
 
         if self.logger is not None:
             for t, q in topics:
-                self.logger.debug("SUBSCRIBING to topic {0} with QoS {1}".format(t, q))
+                self.logger.debug("Subscribing to %s with QoS %d", t, q)
         self._sock.send(packet)
         while True:
             op = self._wait_for_msg()
@@ -641,7 +627,7 @@ class MQTT:
 
         if self.logger is not None:
             for t in topics:
-                self.logger.debug("UNSUBSCRIBING from topic {0}.".format(t))
+                self.logger.debug("Unsubscribing from %s", t)
         self._sock.send(packet)
         if self.logger is not None:
             self.logger.debug("Waiting for UNSUBACK...")
