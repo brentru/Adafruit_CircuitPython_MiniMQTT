@@ -44,7 +44,11 @@ import struct
 import time
 from random import randint
 from micropython import const
-import adafruit_logging as logging
+
+try:
+    import adafruit_logging as logging
+except ModuleNotFoundError:
+    import logging # import native CPython logger
 from .matcher import MQTTMatcher
 
 __version__ = "0.0.0-auto.0"
@@ -60,14 +64,13 @@ MQTT_TLS_PORT = const(8883)
 # MQTT Commands
 MQTT_PINGREQ = b"\xc0\0"
 MQTT_PINGRESP = const(0xD0)
-MQTT_SUB = b"\x82"
+MQTT_SUB = bytearray(b"\x82")
 MQTT_UNSUB = b"\xA2"
 MQTT_PUB = bytearray(b"\x30")
 MQTT_DISCONNECT = b"\xe0\0"
 
 # Variable CONNECT header [MQTT 3.1.2]
 MQTT_HDR_CONNECT = bytearray(b"\x04MQTT\x04\x02\0\0")
-
 
 CONNACK_ERRORS = {
     const(0x01): "Connection Refused - Incorrect Protocol Version",
@@ -89,18 +92,31 @@ class MMQTTException(Exception):
     # pass
 
 
-def set_socket(sock, iface=None):
-    """Helper to set the global socket and optionally set the global network interface.
-    :param sock: socket object.
-    :param iface: internet interface object
+# This module mirror CPython's socket class. It is settable because the network devices are external
+# to CircuitPython.
+socket_module = None  # pylint: disable=invalid-name
+ssl_context = None
 
-    """
-    global _the_sock  # pylint: disable=invalid-name, global-statement
-    _the_sock = sock
-    if iface:
-        global _the_interface  # pylint: disable=invalid-name, global-statement
-        _the_interface = iface
-        _the_sock.set_interface(iface)
+
+# Hang onto open sockets so that we can reuse them.
+_socket_pool = {} # pylint: disable=invalid-name
+def _get_socket(host, port, proto, *, timeout=5):
+    key = (host, port, proto)
+    if key in _socket_pool:
+        return _socket_pool[key]
+    if not socket_module:
+        raise RuntimeError("socket_module must be set before using adafruit_requests")
+    if proto == "https:" and not ssl_context:
+        raise RuntimeError("ssl_context must be set before using adafruit_requests for https")
+    addr_info = socket_module.getaddrinfo(host, port, 0, socket_module.SOCK_STREAM)[0]
+    sock = socket_module.socket(addr_info[0], addr_info[1], addr_info[2])
+    if proto == "https:":
+        sock = ssl_context.wrap_socket(sock, server_hostname=host)
+    sock.settimeout(timeout)  # socket read timeout
+
+    sock.connect((host, port))
+    _socket_pool[key] = sock
+    return sock
 
 
 class MQTT:
@@ -274,16 +290,15 @@ class MQTT:
         :param bool clean_session: Establishes a persistent session.
 
         """
-        self._sock = _the_sock.socket()
-        self._sock.settimeout(15)
         if self.port == 8883:
             try:
                 if self.logger is not None:
                     self.logger.debug(
                         "Attempting to establish secure MQTT connection..."
                     )
-                conntype = _the_interface.TLS_MODE
-                self._sock.connect((self.broker, self.port), conntype)
+                self._sock = _get_socket(self.broker, self.port, "https")
+                #conntype = _the_interface.TLS_MODE
+                #self._sock.connect((self.broker, self.port), conntype)
             except RuntimeError as e:
                 raise MMQTTException("Invalid broker address defined.", e)
         else:
@@ -292,10 +307,7 @@ class MQTT:
                     self.logger.debug(
                         "Attempting to establish insecure MQTT connection..."
                     )
-                addr = _the_sock.getaddrinfo(
-                    self.broker, self.port, 0, _the_sock.SOCK_STREAM
-                )[0]
-                self._sock.connect(addr[-1], _the_interface.TCP_MODE)
+                self._sock = _get_socket(self.broker, self.port, "http")
             except RuntimeError as e:
                 raise MMQTTException("Invalid broker address defined.", e)
 
@@ -552,18 +564,20 @@ class MQTT:
                 self._check_topic(t)
                 topics.append((t, q))
         # Assemble packet
+        packet = bytearray()
+        packet.extend(MQTT_SUB)
         packet_length = 2 + (2 * len(topics)) + (1 * len(topics))
         packet_length += sum(len(topic) for topic, qos in topics)
-        packet_length_byte = packet_length.to_bytes(1, "big")
+        packet.append(packet_length)
+        packet.extend(self._pid.to_bytes(2, "big"))
         self._pid += 1
-        packet_id_bytes = self._pid.to_bytes(2, "big")
-        # Packet with variable and fixed headers
-        packet = MQTT_SUB + packet_length_byte + packet_id_bytes
-        # attaching topic and QOS level to the packet
+
         for t, q in topics:
             topic_size = len(t).to_bytes(2, "big")
-            qos_byte = q.to_bytes(1, "big")
-            packet += topic_size + t + qos_byte
+            packet.extend(topic_size)
+            packet.extend(t.encode())
+            packet.append(q)
+
         if self.logger is not None:
             for t, q in topics:
                 self.logger.debug("SUBSCRIBING to topic {0} with QoS {1}".format(t, q))
